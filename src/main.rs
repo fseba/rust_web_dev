@@ -23,21 +23,25 @@ async fn get_questions(
     params: HashMap<String, String>,
     store: Store
 ) -> Result<impl Reply, Rejection> {
-    let mut start = 0; 
+    if !params.is_empty() {
+        let pagination = extract_pagination(params)?;
 
-    if let Some(input) =  params.get("start") {
-        start = input.parse::<usize>().expect("Could not parse start");
+        let res: Vec<Question> = store.questions.values().cloned().collect();
+        let res = &res[pagination.start..pagination.end];
+        return Ok(warp::reply::json(&res));
+    } else {
+        let res: Vec<Question> = store.questions.values().cloned().collect();
+        return Ok(warp::reply::json(&res));
     }
-    
-    println!("{}", start);
-
-    let res: Vec<Question> = store.questions.values().cloned().collect();
-    
-    return Ok(warp::reply::json(&res));
 }
 
 async fn return_error(r: Rejection) -> Result<impl Reply, Rejection> {
-    if let Some(error) = r.find::<CorsForbidden>() {
+    if let Some(error) = r.find::<Error>() {
+        Ok(warp::reply::with_status(
+            error.to_string(), 
+            StatusCode::RANGE_NOT_SATISFIABLE,
+        ))
+    } else if let Some(error) = r.find::<CorsForbidden>() {
         Ok(warp::reply::with_status(
             error.to_string(), 
             StatusCode::FORBIDDEN
@@ -94,6 +98,27 @@ impl Reject for Error {}
 struct Pagination {
     start: usize,
     end: usize,
+}
+
+fn extract_pagination(
+    params: HashMap<String, String>
+) -> Result<Pagination, Error> {
+    if params.contains_key("start") && params.contains_key("end") {
+        return Ok(Pagination {
+            start: params
+                .get("start")
+                .unwrap()
+                .parse::<usize>()
+                .map_err(Error::ParseError)?,
+            end: params
+                .get("end")
+                .unwrap()
+                .parse::<usize>()
+                .map_err(Error::ParseError)?,
+        });
+    }
+
+    return Err(Error::MissingParameter);
 }
 
 #[tokio::main]
