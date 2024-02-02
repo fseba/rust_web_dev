@@ -71,6 +71,31 @@ impl Store {
     }
 }
 
+#[derive(Debug)]
+enum Error {
+    ParseError(std::num::ParseIntError),
+    MissingParameter,
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match *self {
+            Error::ParseError(ref err) => {
+                write!(f, "Cannot parse parameter: {}", err)
+            },
+            Error::MissingParameter => write!(f, "Missing parameter"),
+        }
+    }
+}
+
+impl Reject for Error {}
+
+#[derive(Debug)]
+struct Pagination {
+    start: usize,
+    end: usize,
+}
+
 #[tokio::main]
 async fn main() {
     let store = Store::new();
