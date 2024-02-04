@@ -1,5 +1,6 @@
-use std::{collections::HashMap, usize};
+use std::{collections::HashMap, sync::Arc, usize};
 use serde::{Deserialize, Serialize};
+use tokio::sync::RwLock;
 use warp::{filters::{body::json, cors::CorsForbidden}, http::Method, reject::Reject, Filter, Rejection, Reply, http::StatusCode};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -26,13 +27,35 @@ async fn get_questions(
     if !params.is_empty() {
         let pagination = extract_pagination(params)?;
 
-        let res: Vec<Question> = store.questions.values().cloned().collect();
-        let res = &res[pagination.start..pagination.end];
+        let res: Vec<Question> = store
+            .questions
+            .read()
+            .await
+            .values()
+            .cloned()
+            .collect();
+        
+        let end_index = if pagination.end > res.len() {
+            res.len()
+        } else {
+            pagination.end
+        };
+
+        let res = &res[pagination.start..end_index];
         return Ok(warp::reply::json(&res));
     } else {
-        let res: Vec<Question> = store.questions.values().cloned().collect();
+        let res: Vec<Question> = store.questions.read().await.values().cloned().collect();
         return Ok(warp::reply::json(&res));
     }
+}
+
+async fn add_question(
+    store: Store,
+    question: Question
+) -> Result<impl warp::Reply, warp::Rejection> {
+    store.questions.write().await.insert(question.id.clone(), question);
+    
+    return Ok(warp::reply::with_status("Question added", StatusCode::OK));
 }
 
 async fn return_error(r: Rejection) -> Result<impl Reply, Rejection> {
@@ -56,14 +79,15 @@ async fn return_error(r: Rejection) -> Result<impl Reply, Rejection> {
 
 #[derive(Clone)]
 struct Store {
-    questions: HashMap<QuestionId, Question>,
+    questions: Arc<RwLock<HashMap<QuestionId, Question>>>,
 }
 impl Store {
     fn new() -> Self {
         Store {
-            questions: Self::init(),
+            questions: Arc::new(RwLock::new(Self::init())),
         }
     }
+
     fn add_question(mut self, question: Question) -> Self {
         self.questions.insert(question.id.clone(), question);
         return self;
@@ -79,6 +103,7 @@ impl Store {
 enum Error {
     ParseError(std::num::ParseIntError),
     MissingParameter,
+    InvalidArgumentsOrder,
 }
 
 impl std::fmt::Display for Error {
@@ -88,6 +113,7 @@ impl std::fmt::Display for Error {
                 write!(f, "Cannot parse parameter: {}", err)
             },
             Error::MissingParameter => write!(f, "Missing parameter"),
+            Error::InvalidArgumentsOrder => write!(f, "Order of arguments is invalid. 'Start' cannot be greater than 'end'"),
         }
     }
 }
@@ -103,22 +129,19 @@ struct Pagination {
 fn extract_pagination(
     params: HashMap<String, String>
 ) -> Result<Pagination, Error> {
-    if params.contains_key("start") && params.contains_key("end") {
-        return Ok(Pagination {
-            start: params
-                .get("start")
-                .unwrap()
-                .parse::<usize>()
-                .map_err(Error::ParseError)?,
-            end: params
-                .get("end")
-                .unwrap()
-                .parse::<usize>()
-                .map_err(Error::ParseError)?,
-        });
-    }
+    if let (Some(start), Some(end)) = (params.get("start"), params.get("end")) {
 
-    return Err(Error::MissingParameter);
+        let start = start.parse::<usize>().map_err(Error::ParseError)?;
+        let end = end.parse::<usize>().map_err(Error::ParseError)?;
+
+        if end >= start {
+            Ok(Pagination { start, end })
+        } else {
+            Err(Error::InvalidArgumentsOrder)
+        }
+    } else {
+        Err(Error::MissingParameter)
+    }
 }
 
 #[tokio::main]
@@ -133,15 +156,24 @@ async fn main() {
             &[Method::PUT, Method::DELETE, Method::GET, Method::POST ]
         );
 
-    let get_items = warp::get()
+    let get_questions = warp::get()
         .and(warp::path("questions"))
         .and(warp::path::end())
         .and(warp::query())
         .and(store_filter)
-        .and_then(get_questions)
-        .recover(return_error);
+        .and_then(get_questions);
     
-    let routes = get_items.with(cors);
+    let add_question = warp::post()
+        .and(warp::path("questions"))
+        .and(warp::path::end())
+        .and(store_filter.clone())
+        .and(warp::body::json())
+        .and_then(add_question);
+    
+    let routes = get_questions
+        .or(add_question)
+        .with(cors)
+        .recover(return_error);
 
     warp::serve(routes)
         .run(([127, 0, 0, 1], 3030))
