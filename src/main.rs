@@ -88,10 +88,10 @@ impl Store {
         }
     }
 
-    fn add_question(mut self, question: Question) -> Self {
-        self.questions.insert(question.id.clone(), question);
-        return self;
-    }
+    // fn add_question(mut self, question: Question) -> Self {
+    //     self.questions.insert(question.id.clone(), question);
+    //     return self;
+    // }
     
     fn init() -> HashMap<QuestionId, Question> {
         let file = include_str!("../questions.json");
@@ -160,7 +160,7 @@ async fn main() {
         .and(warp::path("questions"))
         .and(warp::path::end())
         .and(warp::query())
-        .and(store_filter)
+        .and(store_filter.clone())
         .and_then(get_questions);
     
     let add_question = warp::post()
